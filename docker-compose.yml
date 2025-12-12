@@ -1,0 +1,105 @@
+services:
+  api-gateway:
+    build:
+      context: ./ApiGateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    networks:
+      - file-analysis-server-net
+    depends_on:
+      file-storing-service:
+        condition: service_started
+      file-analysis-service:
+        condition: service_started
+    environment:
+      FILE_STORAGE_URL: http://file-storing-service:8080
+      ANALYSIS_SERVICE_URL: http://file-analysis-service:8080
+
+  file-storing-service:
+    build:
+      context: ./FileStoringService
+    container_name: file-storing-service
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./FileStoringService/files:/files
+      - ./FileStoringService/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - file-analysis-server-net
+    depends_on:
+      db_files:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: Host=db_files;Port=5432;Database=${FILES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};
+      FILES_DIR: /files
+
+  file-analysis-service:
+    build:
+      context: ./FileAnalysisService
+    container_name: file-analysis-service
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./FileAnalysisService/images:/images
+      - ./FileAnalysisService/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - file-analysis-server-net
+    depends_on:
+      db_analysis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: Host=db_analysis;Port=5432;Database=${ANALYSIS_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};
+      FILE_STORAGE_URL: http://file-storing-service:8080
+      IMAGES_DIR: /images
+
+  db_files:
+    image: postgres:15
+    container_name: files-db
+    restart: always
+    environment:
+      POSTGRES_DB: ${FILES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-files-data:/var/lib/postgresql/data
+      - ./FileStoringService/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - file-analysis-server-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${FILES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  db_analysis:
+    image: postgres:15
+    container_name: analysis-db
+    restart: always
+    environment:
+      POSTGRES_DB: ${ANALYSIS_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - db-analysis-data:/var/lib/postgresql/data
+      - ./FileAnalysisService/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - file-analysis-server-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${ANALYSIS_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db-files-data:
+  db-analysis-data:
+
+networks:
+  file-analysis-server-net:
+    driver: bridge
